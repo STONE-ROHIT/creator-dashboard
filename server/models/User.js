@@ -41,6 +41,16 @@ class User {
   static async verifyPassword(password, passwordHash) {
     return await bcrypt.compare(password, passwordHash);
   }
+
+  // Update user role
+  static async updateRole(userId, role) {
+    const result = await pool.query(
+      'UPDATE users SET role = $1, updated_at = NOW() WHERE id = $2 RETURNING *',
+      [role, userId]
+    );
+    
+    return result.rows[0];
+  }
 }
 
 export default User;
