@@ -1,56 +1,40 @@
 import Content from '../models/Content.js';
 import Creator from '../models/Creator.js';
 
-// Upload new content
-// Only creators can do this
+/**
+ * Upload new content
+ * Creator only
+ */
 export const uploadContent = async (req, res) => {
   try {
-    const userId = req.user.id;
+    const creatorId = req.user.id; // From JWT
     const { title, description, fileUrl, price } = req.body;
-    
-    // Validate inputs
-    if (!title || title.length < 3) {
-      return res.status(400).json({
-        error: 'Title must be at least 3 characters'
-      });
-    }
-    
-    if (!fileUrl) {
-      return res.status(400).json({
-        error: 'File URL is required'
-      });
-    }
-    
-    if (!price || price < 0) {
-      return res.status(400).json({
-        error: 'Price must be a positive number'
-      });
-    }
-    
-    // Get creator profile for this user
-    const creator = await Creator.findByUserId(userId);
-    
+
+    // Get creator profile (needed to link content)
+    const creator = await Creator.findByUserId(creatorId);
     if (!creator) {
-      return res.status(403).json({
-        error: 'You must be a creator to upload content'
+      return res.status(400).json({
+        error: 'You must become a creator first'
       });
     }
-    
+
     // Create content
-    const content = await Content.create(
-      creator.id,
-      title,
-      description || '',
-      fileUrl,
-      price
-    );
-    
+    // Model handles validation and is_free auto-set
+    const content = await Content.create(creatorId, title, description, fileUrl, price);
+
     res.status(201).json({
       message: 'Content uploaded successfully',
       content
     });
-    
+
   } catch (err) {
+    // Handle validation errors
+    if (err.message.includes('must be')) {
+      return res.status(400).json({
+        error: err.message
+      });
+    }
+
     console.error('uploadContent error:', err);
     res.status(500).json({
       error: 'Server error'
@@ -58,25 +42,20 @@ export const uploadContent = async (req, res) => {
   }
 };
 
-// Get specific content
-// Anyone can view if published
+/**
+ * Get specific content
+ * Access control already verified by middleware
+ */
 export const getContent = async (req, res) => {
   try {
-    const contentId = req.params.id;
-    
-    const content = await Content.findWithCreatorInfo(contentId);
-    
-    if (!content) {
-      return res.status(404).json({
-        error: 'Content not found'
-      });
-    }
-    
+    // Content already fetched and access verified by middleware
+    const content = req.content;
+
     // Increment view count
-    await Content.incrementViews(contentId);
-    
+    await Content.incrementViews(content.id);
+
     res.json(content);
-    
+
   } catch (err) {
     console.error('getContent error:', err);
     res.status(500).json({
@@ -85,30 +64,29 @@ export const getContent = async (req, res) => {
   }
 };
 
-// Get creator's own content
-// Only creator can view their own unpublished content
+/**
+ * Get creator's own content
+ * Creator only
+ */
 export const getMyContent = async (req, res) => {
   try {
-    const userId = req.user.id;
-    
-    // Get creator profile
-    const creator = await Creator.findByUserId(userId);
-    
+    const creatorId = req.user.id;
+
+    const creator = await Creator.findByUserId(creatorId);
     if (!creator) {
-      return res.status(403).json({
-        error: 'You must be a creator'
+      return res.status(404).json({
+        error: 'You are not a creator'
       });
     }
-    
-    // Get all their content (including unpublished)
+
     const content = await Content.findByCreatorId(creator.id);
-    
+
     res.json({
       creator_id: creator.id,
       content_count: content.length,
       content
     });
-    
+
   } catch (err) {
     console.error('getMyContent error:', err);
     res.status(500).json({
@@ -117,46 +95,44 @@ export const getMyContent = async (req, res) => {
   }
 };
 
-// Update content
-// Only owner can update
+/**
+ * Update content
+ * Creator only, ownership verified by middleware
+ */
 export const updateContent = async (req, res) => {
   try {
-    const contentId = req.params.id;
-    const { title, description, price } = req.body;
-    const userId = req.user.id;
-    
-    // Get content
-    const content = await Content.findById(contentId);
-    
-    if (!content) {
-      return res.status(404).json({
-        error: 'Content not found'
-      });
-    }
-    
-    // Get creator and verify ownership
-    const creator = await Creator.findById(content.creator_id);
-    
-    if (creator.user_id !== userId) {
-      return res.status(403).json({
-        error: 'You do not own this content'
-      });
-    }
-    
-    // Update
-    const updated = await Content.update(
+    const { id: contentId } = req.params;
+    const creatorId = req.user.id;
+    const { title, description, fileUrl, price } = req.body;
+
+    // Model verifies ownership
+    const content = await Content.update(
       contentId,
-      title || content.title,
-      description !== undefined ? description : content.description,
-      price !== undefined ? price : content.price
+      creatorId,
+      title,
+      description,
+      fileUrl,
+      price
     );
-    
+
     res.json({
       message: 'Content updated',
-      content: updated
+      content
     });
-    
+
   } catch (err) {
+    if (err.message.includes('Unauthorized')) {
+      return res.status(403).json({
+        error: err.message
+      });
+    }
+
+    if (err.message.includes('must be')) {
+      return res.status(400).json({
+        error: err.message
+      });
+    }
+
     console.error('updateContent error:', err);
     res.status(500).json({
       error: 'Server error'
@@ -164,39 +140,30 @@ export const updateContent = async (req, res) => {
   }
 };
 
-// Delete content
-// Only owner can delete
+/**
+ * Delete content (soft delete)
+ * Creator only, ownership verified by middleware
+ */
 export const deleteContent = async (req, res) => {
   try {
-    const contentId = req.params.id;
-    const userId = req.user.id;
-    
-    // Get content
-    const content = await Content.findById(contentId);
-    
-    if (!content) {
-      return res.status(404).json({
-        error: 'Content not found'
-      });
-    }
-    
-    // Verify ownership
-    const creator = await Creator.findById(content.creator_id);
-    
-    if (creator.user_id !== userId) {
-      return res.status(403).json({
-        error: 'You do not own this content'
-      });
-    }
-    
-    // Delete (soft delete)
-    await Content.delete(contentId);
-    
+    const { id: contentId } = req.params;
+    const creatorId = req.user.id;
+
+    // Model verifies ownership
+    const content = await Content.delete(contentId, creatorId);
+
     res.json({
-      message: 'Content deleted'
+      message: 'Content deleted',
+      content
     });
-    
+
   } catch (err) {
+    if (err.message.includes('Unauthorized')) {
+      return res.status(403).json({
+        error: err.message
+      });
+    }
+
     console.error('deleteContent error:', err);
     res.status(500).json({
       error: 'Server error'
@@ -204,23 +171,25 @@ export const deleteContent = async (req, res) => {
   }
 };
 
-// Browse all published content
-// Anyone can view
+/**
+ * Browse all published content
+ * Public endpoint, no auth required
+ */
 export const browseContent = async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1;
     const limit = 20;
     const offset = (page - 1) * limit;
-    
+
     const content = await Content.findAllPublished(limit, offset);
-    
+
     res.json({
       page,
       limit,
       content_count: content.length,
       content
     });
-    
+
   } catch (err) {
     console.error('browseContent error:', err);
     res.status(500).json({

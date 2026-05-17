@@ -4,6 +4,7 @@ import dotenv from 'dotenv';
 import authRoutes from './routes/auth.js';
 import creatorRoutes from './routes/creators.js';
 import contentRoutes from './routes/content.js';
+import subscriptionRoutes from './routes/subscriptions.js';
 
 dotenv.config();
 
@@ -17,10 +18,11 @@ app.use(express.json());
 app.use('/api/auth', authRoutes);
 app.use('/api/creators', creatorRoutes);
 app.use('/api/content', contentRoutes);
+app.use('/api/subscriptions', subscriptionRoutes);
 
 // Health check
 app.get('/api/health', (req, res) => {
-  res.json({ 
+  res.json({
     status: 'ok',
     message: 'Server is running',
     timestamp: new Date().toISOString()
