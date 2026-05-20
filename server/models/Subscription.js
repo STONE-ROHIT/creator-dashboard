@@ -7,7 +7,7 @@ class Subscription {
    * Business rules:
    * - Only for paid content (is_free = false)
    * - Not for own content (creator can view without subscription)
-   * - Status always starts as 'active'
+   * - Status starts as 'pending' (not active until payment confirmed)
    * - Lifetime access (no expiry for MVP)
    * 
    * Unique constraint prevents:
@@ -18,7 +18,7 @@ class Subscription {
     try {
       const result = await pool.query(
         `INSERT INTO subscriptions (user_id, content_id, subscription_type, status)
-         VALUES ($1, $2, $3, 'active')
+         VALUES ($1, $2, $3, 'pending')
          RETURNING *`,
         [userId, contentId, subscriptionType]
       );
@@ -35,22 +35,83 @@ class Subscription {
   }
 
   /**
+   * Find subscription by ID
+   */
+  static async findById(subscriptionId) {
+    if (!subscriptionId || typeof subscriptionId !== 'number') {
+      return undefined;
+    }
+
+    const result = await pool.query(
+      'SELECT * FROM subscriptions WHERE id = $1',
+      [subscriptionId]
+    );
+
+    return result.rows[0];
+  }
+
+  /**
    * Find active subscription between user and content
    * 
-   * CRITICAL: Only checks status = 'active'
-   * This is the security boundary for access control
-   * Cancelled subscriptions do NOT grant access
+   * CRITICAL: Only returns status='active' subscriptions
+   * This is the source of truth for access control
+   * Pending and cancelled subscriptions do NOT grant access
    */
   static async findActive(userId, contentId) {
+    if (!userId || !contentId) {
+      return undefined;
+    }
+
     const result = await pool.query(
-      `SELECT * FROM subscriptions 
-       WHERE user_id = $1 
-       AND content_id = $2 
-       AND status = 'active'`,
+      `SELECT * FROM subscriptions
+       WHERE user_id = $1 AND content_id = $2 AND status = 'active'`,
       [userId, contentId]
     );
 
     return result.rows[0]; // undefined if not found
+  }
+
+  /**
+   * Find pending subscription by payment ID
+   * Used by webhook to find subscription for a payment
+   */
+  static async findByPaymentId(paymentId) {
+    if (!paymentId) {
+      return undefined;
+    }
+
+    const result = await pool.query(
+      'SELECT * FROM subscriptions WHERE payment_id = $1',
+      [paymentId]
+    );
+
+    return result.rows[0];
+  }
+
+  /**
+   * Activate subscription (called by webhook after payment confirmed)
+   * 
+   * Updates status to 'active' and records payment details
+   * Only updates if currently in 'pending' state (safety check)
+   */
+  static async activate(subscriptionId, paidAmount) {
+    if (!subscriptionId || typeof paidAmount !== 'number') {
+      throw new Error('subscriptionId and paidAmount are required');
+    }
+
+    const result = await pool.query(
+      `UPDATE subscriptions
+       SET status = 'active', paid_amount = $1, paid_at = NOW()
+       WHERE id = $2 AND status = 'pending'
+       RETURNING *`,
+      [paidAmount, subscriptionId]
+    );
+
+    if (!result.rows[0]) {
+      throw new Error('Subscription not found or not in pending status');
+    }
+
+    return result.rows[0];
   }
 
   /**
