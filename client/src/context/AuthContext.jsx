@@ -7,10 +7,11 @@ import React, { createContext, useState, useEffect } from 'react';
  * 
  * Provides:
  * - token: JWT token (stored in localStorage)
- * - user: Current user object { id, email, username, role }
+ * - user: Current user object { id, role }
  * - isLoading: Loading state during auth checks
  * - login: Login function
  * - register: Register function
+ * - becomeCreator: Become creator function
  * - logout: Logout function
  */
 
@@ -30,11 +31,8 @@ export const AuthProvider = ({ children }) => {
       const storedToken = localStorage.getItem('token');
       
       if (storedToken) {
-        // Try to restore from localStorage
         try {
-          // Validate token format (basic check)
           if (storedToken.startsWith('eyJ')) {
-            // Parse JWT to get user info
             const base64Url = storedToken.split('.')[1];
             const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
             const jsonPayload = decodeURIComponent(
@@ -46,7 +44,6 @@ export const AuthProvider = ({ children }) => {
             
             const decoded = JSON.parse(jsonPayload);
             
-            // Token restored from localStorage
             setToken(storedToken);
             setUser({
               id: decoded.id,
@@ -55,7 +52,6 @@ export const AuthProvider = ({ children }) => {
           }
         } catch (err) {
           console.error('Token restoration failed:', err.message);
-          // Invalid token, clear it
           localStorage.removeItem('token');
         }
       }
@@ -68,9 +64,6 @@ export const AuthProvider = ({ children }) => {
 
   /**
    * Login user
-   * @param {string} email - User email
-   * @param {string} password - User password
-   * @returns {Promise<void>}
    */
   const login = async (email, password) => {
     try {
@@ -91,11 +84,8 @@ export const AuthProvider = ({ children }) => {
       }
 
       const data = await response.json();
-
-      // Extract token
       const newToken = data.token;
 
-      // Parse JWT to get user info
       const base64Url = newToken.split('.')[1];
       const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
       const jsonPayload = decodeURIComponent(
@@ -107,10 +97,7 @@ export const AuthProvider = ({ children }) => {
 
       const decoded = JSON.parse(jsonPayload);
 
-      // Store token in localStorage
       localStorage.setItem('token', newToken);
-
-      // Update state
       setToken(newToken);
       setUser({
         id: decoded.id,
@@ -126,11 +113,6 @@ export const AuthProvider = ({ children }) => {
 
   /**
    * Register user
-   * @param {string} email - User email
-   * @param {string} username - User username
-   * @param {string} password - User password
-   * @param {string} passwordConfirm - Password confirmation
-   * @returns {Promise<void>}
    */
   const register = async (email, username, password, passwordConfirm) => {
     try {
@@ -163,6 +145,64 @@ export const AuthProvider = ({ children }) => {
   };
 
   /**
+   * CRITICAL: Become a creator
+   * Backend returns new token with creator role
+   * Frontend MUST sync this token immediately
+   */
+  const becomeCreator = async (displayName) => {
+    try {
+      const response = await fetch(
+        `${import.meta.env.VITE_API_URL}/creators/become-creator`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${token}`,
+          },
+          body: JSON.stringify({ displayName }),
+        }
+      );
+
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || 'Failed to become creator');
+      }
+
+      const data = await response.json();
+
+      // CRITICAL: Extract new token from response
+      const newToken = data.token;
+
+      // Parse new token
+      const base64Url = newToken.split('.')[1];
+      const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
+      const jsonPayload = decodeURIComponent(
+        atob(base64)
+          .split('')
+          .map((c) => '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2))
+          .join('')
+      );
+
+      const decoded = JSON.parse(jsonPayload);
+
+      // CRITICAL: Update localStorage with NEW token
+      localStorage.setItem('token', newToken);
+
+      // CRITICAL: Update AuthContext with NEW role
+      setToken(newToken);
+      setUser({
+        id: decoded.id,
+        role: decoded.role,
+      });
+
+      return { success: true, creator: data.creator };
+    } catch (err) {
+      console.error('Become creator error:', err.message);
+      return { success: false, error: err.message };
+    }
+  };
+
+  /**
    * Logout user
    */
   const logout = () => {
@@ -177,6 +217,7 @@ export const AuthProvider = ({ children }) => {
     isLoading,
     login,
     register,
+    becomeCreator,
     logout,
     isAuthenticated: !!token,
   };
@@ -190,7 +231,6 @@ export const AuthProvider = ({ children }) => {
 
 /**
  * Hook to use AuthContext
- * @returns {object} Auth context value
  */
 export const useAuth = () => {
   const context = React.useContext(AuthContext);

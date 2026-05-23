@@ -9,7 +9,6 @@ const API_URL = import.meta.env.VITE_API_URL;
 
 /**
  * Get JWT token from localStorage
- * @returns {string|null} JWT token or null
  */
 export const getToken = () => {
   return localStorage.getItem('token');
@@ -17,13 +16,6 @@ export const getToken = () => {
 
 /**
  * Make authenticated API request
- * Automatically includes JWT token in Authorization header
- * 
- * @param {string} endpoint - API endpoint (e.g., '/api/content')
- * @param {string} method - HTTP method (GET, POST, PUT, DELETE)
- * @param {object} body - Request body (optional)
- * @returns {Promise<object>} Response data
- * @throws {Error} If request fails or token is missing
  */
 export const apiCall = async (endpoint, method = 'GET', body = null) => {
   const token = getToken();
@@ -36,7 +28,6 @@ export const apiCall = async (endpoint, method = 'GET', body = null) => {
     'Content-Type': 'application/json',
   };
 
-  // Add Authorization header if token exists
   if (token) {
     headers.Authorization = `Bearer ${token}`;
   }
@@ -53,9 +44,7 @@ export const apiCall = async (endpoint, method = 'GET', body = null) => {
   try {
     const response = await fetch(`${API_URL}${endpoint}`, options);
 
-    // Handle 401 Unauthorized (token expired or invalid)
     if (response.status === 401) {
-      // Clear token and redirect to login would happen in App.jsx
       localStorage.removeItem('token');
       throw new Error('Unauthorized. Please login again.');
     }
@@ -75,10 +64,6 @@ export const apiCall = async (endpoint, method = 'GET', body = null) => {
 
 /**
  * Public API call (no authentication required)
- * @param {string} endpoint - API endpoint
- * @param {string} method - HTTP method
- * @param {object} body - Request body (optional)
- * @returns {Promise<object>} Response data
  */
 export const publicApiCall = async (endpoint, method = 'GET', body = null) => {
   const headers = {
@@ -108,4 +93,61 @@ export const publicApiCall = async (endpoint, method = 'GET', body = null) => {
     console.error(`API Error [${method} ${endpoint}]:`, err.message);
     throw err;
   }
+};
+
+/**
+ * Format date for display
+ */
+export const formatDate = (isoDate) => {
+  if (!isoDate) return '';
+  
+  try {
+    const date = new Date(isoDate);
+    return date.toLocaleDateString('en-US', {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric',
+    });
+  } catch (err) {
+    return '';
+  }
+};
+
+/**
+ * UPDATED: Format currency for display
+ * Handles both numbers and strings
+ */
+export const formatCurrency = (amount) => {
+  // Handle null/undefined
+  if (amount === null || amount === undefined) {
+    return '₹0.00';
+  }
+
+  // Convert string to number if needed
+  let num = amount;
+  if (typeof amount === 'string') {
+    num = parseFloat(amount);
+  }
+
+  // Validate number
+  if (isNaN(num)) {
+    return '₹0.00';
+  }
+
+  return `₹${num.toFixed(2)}`;
+};
+
+/**
+ * Format large numbers for display
+ */
+export const formatNumber = (num) => {
+  if (typeof num !== 'number') return '0';
+  
+  if (num >= 1000000) {
+    return (num / 1000000).toFixed(1) + 'M';
+  }
+  if (num >= 1000) {
+    return (num / 1000).toFixed(1) + 'K';
+  }
+  return num.toString();
 };

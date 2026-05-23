@@ -5,7 +5,8 @@ import {
   getMyContent,
   updateContent,
   deleteContent,
-  browseContent
+  browseContent,
+  recordContentView
 } from '../controllers/contentController.js';
 import { authenticate, requireCreator } from '../middleware/auth.js';
 import { checkContentAccess, checkContentOwnership } from '../middleware/contentAccess.js';
@@ -23,16 +24,18 @@ router.get('/my', authenticate, requireCreator, getMyContent);
 router.get('/browse', browseContent);
 
 // GET /api/content/:id - Get specific content with access check
-// No authenticate middleware - checkContentAccess handles auth internally
-// This allows public access to free content
+// No view increment here (side effects removed)
 router.get('/:id', checkContentAccess, getContent);
 
+// POST /api/content/:id/view - Record view
+// NEW: Separate endpoint for analytics
+// Auth optional (unauthenticated views count too)
+router.post('/:id/view', recordContentView);
+
 // PUT /api/content/:id - Update content (owner only)
-// Verify owner before allowing modification
 router.put('/:id', authenticate, requireCreator, checkContentOwnership, updateContent);
 
 // DELETE /api/content/:id - Delete content (owner only)
-// Verify owner before allowing deletion
 router.delete('/:id', authenticate, requireCreator, checkContentOwnership, deleteContent);
 
 export default router;

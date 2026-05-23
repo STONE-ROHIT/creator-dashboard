@@ -11,23 +11,20 @@ import { Navbar } from './components/Navbar';
 import { LoginPage } from './pages/LoginPage';
 import { RegisterPage } from './pages/RegisterPage';
 import { DashboardPage } from './pages/DashboardPage';
+import { BrowseContentPage } from './pages/BrowseContentPage';
+import { ContentDetailPage } from './pages/ContentDetailPage';
 
 /**
  * AppRoutes
- * 
- * Separated from App so we can access AuthContext inside Routes
  */
 const AppRoutes = () => {
   const { isAuthenticated } = useAuth();
 
   return (
     <>
-      {/* Navigation */}
       <Navbar />
 
-      {/* Page Routes */}
       <Routes>
-        {/* Public Routes */}
         <Route
           path="/login"
           element={
@@ -41,13 +38,14 @@ const AppRoutes = () => {
           }
         />
 
-        {/* Protected Routes */}
+        <Route path="/browse" element={<BrowseContentPage />} />
+        <Route path="/content/:id" element={<ContentDetailPage />} />
+
         <Route
           path="/dashboard"
           element={<ProtectedRoute component={<DashboardPage />} />}
         />
 
-        {/* Root Path */}
         <Route
           path="/"
           element={
@@ -59,7 +57,6 @@ const AppRoutes = () => {
           }
         />
 
-        {/* 404 */}
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </>
@@ -68,8 +65,6 @@ const AppRoutes = () => {
 
 /**
  * App
- * 
- * Root component with AuthProvider wrapper
  */
 export default function App() {
   return (

@@ -40,7 +40,6 @@ class Content {
     }
 
     // AUTO-SET is_free based on price
-    // This is the KEY FIX for the free content issue
     const isFree = numPrice === 0;
 
     try {
@@ -83,11 +82,14 @@ class Content {
 
   /**
    * Find all published content (for browsing)
+   * UPDATED: Cast price to float to ensure number type (not string)
    * Only shows non-archived content
    */
   static async findAllPublished(limit = 20, offset = 0) {
     const result = await pool.query(
-      `SELECT c.*, cr.display_name as creator_name
+      `SELECT c.id, c.creator_id, c.title, c.description, c.file_url, 
+              c.price::float as price, c.is_free, c.views_count, c.status, 
+              c.created_at, cr.display_name as creator_name
        FROM content c
        JOIN creators cr ON c.creator_id = cr.id
        WHERE c.status = 'published'
@@ -177,7 +179,7 @@ class Content {
 
   /**
    * Increment view count
-   * Called every time someone views content
+   * Called when user views content
    */
   static async incrementViews(contentId) {
     await pool.query(

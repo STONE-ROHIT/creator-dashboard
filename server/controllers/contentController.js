@@ -1,5 +1,6 @@
 import Content from '../models/Content.js';
 import Creator from '../models/Creator.js';
+import jwt from 'jsonwebtoken';
 
 /**
  * Upload new content
@@ -7,7 +8,7 @@ import Creator from '../models/Creator.js';
  */
 export const uploadContent = async (req, res) => {
   try {
-    const creatorId = req.user.id; // From JWT
+    const creatorId = req.user.id;
     const { title, description, fileUrl, price } = req.body;
 
     // Get creator profile (needed to link content)
@@ -19,7 +20,6 @@ export const uploadContent = async (req, res) => {
     }
 
     // Create content
-    // Model handles validation and is_free auto-set
     const content = await Content.create(creatorId, title, description, fileUrl, price);
 
     res.status(201).json({
@@ -28,7 +28,6 @@ export const uploadContent = async (req, res) => {
     });
 
   } catch (err) {
-    // Handle validation errors
     if (err.message.includes('must be')) {
       return res.status(400).json({
         error: err.message
@@ -44,20 +43,74 @@ export const uploadContent = async (req, res) => {
 
 /**
  * Get specific content
- * Access control already verified by middleware
+ * UPDATED: NO view increment (side effects removed)
+ * Access control verified by middleware
  */
 export const getContent = async (req, res) => {
   try {
     // Content already fetched and access verified by middleware
     const content = req.content;
 
-    // Increment view count
-    await Content.incrementViews(content.id);
-
+    // NO increment here - views are recorded via separate POST endpoint
     res.json(content);
 
   } catch (err) {
     console.error('getContent error:', err);
+    res.status(500).json({
+      error: 'Server error'
+    });
+  }
+};
+
+/**
+ * NEW: Record that user viewed content
+ * Separate from GET for analytics
+ * Increments views with business logic (creator self-views don't count)
+ */
+export const recordContentView = async (req, res) => {
+  try {
+    const contentId = req.params.id;
+    
+    // Get content
+    const content = await Content.findById(contentId);
+    if (!content) {
+      return res.status(404).json({
+        error: 'Content not found'
+      });
+    }
+
+    // Extract userId from token if present
+    let userId = null;
+    const authHeader = req.headers.authorization;
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      try {
+        const token = authHeader.substring(7);
+        const decoded = jwt.verify(token, process.env.JWT_SECRET);
+        userId = decoded.id;
+      } catch (err) {
+        // Invalid token - continue without userId
+        // Unauthenticated views still count
+      }
+    }
+
+    // Business rule: Creator self-views don't count
+    if (userId && content.creator_id === userId) {
+      return res.json({
+        message: 'View recorded (not counted - self view)',
+        views_count: content.views_count
+      });
+    }
+
+    // Everyone else increments
+    await Content.incrementViews(contentId);
+
+    res.json({
+      message: 'View recorded',
+      views_count: content.views_count + 1
+    });
+
+  } catch (err) {
+    console.error('recordContentView error:', err);
     res.status(500).json({
       error: 'Server error'
     });
@@ -105,7 +158,6 @@ export const updateContent = async (req, res) => {
     const creatorId = req.user.id;
     const { title, description, fileUrl, price } = req.body;
 
-    // Model verifies ownership
     const content = await Content.update(
       contentId,
       creatorId,
@@ -149,7 +201,6 @@ export const deleteContent = async (req, res) => {
     const { id: contentId } = req.params;
     const creatorId = req.user.id;
 
-    // Model verifies ownership
     const content = await Content.delete(contentId, creatorId);
 
     res.json({
