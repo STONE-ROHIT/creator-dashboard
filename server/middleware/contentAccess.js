@@ -3,48 +3,31 @@ import Content from '../models/Content.js';
 import Subscription from '../models/Subscription.js';
 
 /**
- * CRITICAL MIDDLEWARE: Determine if user can access content
+ * Check content access
  * 
- * Access hierarchy (in order):
- * 1. Free content (is_free=true) → anyone can view
- * 2. Paid content + not authenticated → 401
- * 3. Paid content + creator → creator always sees own
- * 4. Paid content + subscriber → check active subscription
- * 5. Else → 403 (has access to paid but no subscription)
- * 
- * Why this order?
- * - Check free first (cheapest, no DB queries)
- * - Reject unauth early (avoid pointless subscription check)
- * - Creator check (should pass to allowed access)
- * - Subscription check (most expensive, last)
- * 
- * Security:
- * - User ID extracted from JWT (can't be faked)
- * - Content verified in database (can't be tampered)
- * - Subscription status explicitly checked (not implicit)
+ * CRITICAL: 403 responses MUST include full content metadata
+ * So frontend can show locked preview
  */
 export const checkContentAccess = async (req, res, next) => {
   try {
     const { id: contentId } = req.params;
 
-    // Extract user ID from JWT if present
     let userId = null;
-
     const authHeader = req.headers.authorization;
+    
     if (authHeader && authHeader.startsWith('Bearer ')) {
       const token = authHeader.substring(7);
       try {
         const decoded = jwt.verify(token, process.env.JWT_SECRET);
         userId = decoded.id;
       } catch (err) {
-        // Invalid or expired token
         return res.status(401).json({
           error: 'Invalid or expired token'
         });
       }
     }
 
-    // Get content from database
+    // Get content
     const content = await Content.findById(contentId);
 
     if (!content) {
@@ -55,43 +38,49 @@ export const checkContentAccess = async (req, res, next) => {
 
     // ===== ACCESS CONTROL HIERARCHY =====
 
-    // Level 1: FREE CONTENT
-    // Anyone (authenticated or not) can view free content
-    // This is the KEY FIX: is_free=true is source of truth
+    // Level 1: FREE CONTENT (everyone)
     if (content.is_free) {
       req.content = content;
       return next();
     }
 
-    // Level 2: PAID CONTENT REQUIRES AUTHENTICATION
-    // Paid content is not publicly accessible
+    // Level 2: PAID CONTENT REQUIRES AUTH
     if (!userId) {
       return res.status(401).json({
         error: 'Login required to view paid content'
       });
     }
 
-    // Level 3: CREATOR CAN VIEW OWN CONTENT
-    // Creator doesn't need subscription to view their own content
-    // This is an implicit right of ownership
+    // Level 3: CREATOR BYPASS
     if (content.creator_id === userId) {
       req.content = content;
       return next();
     }
 
-    // Level 4: SUBSCRIBER CHECK
-    // For paid content by someone else, must have active subscription
-    // This is the most critical security check
+    // Level 4: SUBSCRIPTION CHECK
     const subscription = await Subscription.findActive(userId, contentId);
 
     if (!subscription) {
+      // ✅ CRITICAL: Return FULL content metadata on 403
+      // Frontend needs this to show locked preview
       return res.status(403).json({
         error: 'Must subscribe to view this content',
-        content_price: content.price
+        locked: true,
+        content: {
+          id: content.id,
+          creator_id: content.creator_id,
+          title: content.title,
+          description: content.description,
+          file_url: content.file_url,
+          price: parseFloat(content.price),  // ✅ Ensure number
+          is_free: content.is_free,
+          views_count: content.views_count,
+          created_at: content.created_at
+        }
       });
     }
 
-    // User has subscription, can view
+    // User has subscription
     req.content = content;
     req.subscription = subscription;
     next();
@@ -106,7 +95,6 @@ export const checkContentAccess = async (req, res, next) => {
 
 /**
  * Check content ownership
- * Used for edit/delete operations
  */
 export const checkContentOwnership = async (req, res, next) => {
   try {

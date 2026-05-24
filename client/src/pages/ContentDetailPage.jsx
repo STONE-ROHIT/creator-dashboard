@@ -1,185 +1,265 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { SubscribeButton } from '../components/SubscribeButton';
 import { LoadingSpinner } from '../components/LoadingSpinner';
-import { apiCall, formatCurrency, formatDate, formatNumber } from '../utils/api';
+import { NotFoundPage } from '../components/NotFoundPage';
+import { LoginPromptUI } from '../components/LoginPromptUI';
+import { LockedPremiumContentUI } from '../components/LockedPremiumContentUI';
+import { AccessibleContentUI } from '../components/AccessibleContentUI';
+import { ErrorPage } from '../components/ErrorPage';
+import { checkContentAccess } from '../utils/subscriptionService';
 
 /**
  * ContentDetailPage
- * Shows full details of a single content item
- * Separate GET (fetch) from POST (view recording)
+ * 
+ * COMPLETE REWRITE with proper state machine
+ * No more "stuck loading" state
+ * 
+ * State machine: null (loading) → one of:
+ * - 'accessible' (user can view)
+ * - 'locked' (needs subscription)
+ * - 'requires_auth' (needs login)
+ * - 'not_found' (404)
+ * - 'error' (server error)
  */
 export const ContentDetailPage = () => {
   const { id } = useParams();
   const navigate = useNavigate();
   const { user, isAuthenticated } = useAuth();
 
+  // ===== STATE =====
   const [content, setContent] = useState(null);
-  const [isLoading, setIsLoading] = useState(true);
+  const [accessState, setAccessState] = useState(null);  // null = loading
   const [error, setError] = useState(null);
-  const [accessDenied, setAccessDenied] = useState(false);
+  const [subscription, setSubscription] = useState(null);
 
   /**
-   * Fetch content data (no side effects)
+   * Fetch content and determine access
+   * 
+   * CRITICAL:
+   * - Always sets accessState to a final value (never leaves it null)
+   * - Handles all HTTP status codes
+   * - Extracts content from 403 response
+   * - Never has unhandled states
    */
   const fetchContent = async () => {
     try {
-      setIsLoading(true);
+      // Start loading
+      setAccessState(null);
       setError(null);
-      setAccessDenied(false);
+      setContent(null);
 
-      const response = await apiCall(`/content/${id}`);
-      setContent(response);
-    } catch (err) {
-      console.error('Failed to fetch content:', err.message);
+      const token = localStorage.getItem('token');
+      const headers = {
+        'Content-Type': 'application/json',
+      };
 
-      if (err.message.includes('Must subscribe')) {
-        setAccessDenied(true);
-        setError('You need a subscription to view this content');
-      } else if (err.message.includes('Login required')) {
-        setError('Login required to view paid content');
-      } else if (err.message.includes('not found')) {
-        setError('Content not found');
-      } else if (err.message.includes('Unauthorized')) {
-        setError('Login required');
-      } else {
-        setError(err.message || 'Failed to load content');
+      if (token) {
+        headers.Authorization = `Bearer ${token}`;
       }
-    } finally {
-      setIsLoading(false);
+
+      const response = await fetch(
+        `${import.meta.env.VITE_API_URL}/content/${id}`,
+        { headers }
+      );
+
+      // Try to parse response
+      let data = null;
+      try {
+        data = await response.json();
+      } catch (e) {
+        // Response is not JSON
+        console.error('Non-JSON response:', e);
+        setError('Invalid server response');
+        setAccessState('error');
+        return;
+      }
+
+      // ===== HANDLE BY STATUS CODE =====
+
+      if (response.ok) {
+        // 200: Content accessible
+        console.log('[ContentDetailPage] 200 Accessible:', data);
+        setContent(data);
+        setAccessState('accessible');
+        return;
+      }
+
+      if (response.status === 403) {
+        // 403: Locked premium content
+        console.log('[ContentDetailPage] 403 Locked:', data);
+        
+        // Extract content from response
+        // Backend returns: { error, locked: true, content: {...} }
+        const contentData = data.content || data;
+        
+        if (!contentData || !contentData.id) {
+          // Malformed response
+          console.error('403 response missing content:', data);
+          setError('Unable to load content');
+          setAccessState('error');
+          return;
+        }
+
+        setContent(contentData);
+        setAccessState('locked');
+        return;
+      }
+
+      if (response.status === 401) {
+        // 401: Not authenticated
+        console.log('[ContentDetailPage] 401 Unauthorized');
+        setAccessState('requires_auth');
+        return;
+      }
+
+      if (response.status === 404) {
+        // 404: Not found
+        console.log('[ContentDetailPage] 404 Not Found');
+        setAccessState('not_found');
+        return;
+      }
+
+      // Other status codes
+      console.error('[ContentDetailPage] Unhandled status:', response.status, data);
+      setError(data.error || `Server error (${response.status})`);
+      setAccessState('error');
+
+    } catch (err) {
+      // Network error, JSON parse error, etc.
+      console.error('[ContentDetailPage] Fetch error:', err);
+      setError(err.message || 'Network error');
+      setAccessState('error');
     }
   };
 
   /**
-   * Record view (separate from fetch)
+   * Check subscription status for accessible content
    */
-  const recordView = async () => {
+  const checkSubscription = async () => {
+    // Only check if:
+    // - User is authenticated
+    // - Content is accessible (not locked)
+    if (!isAuthenticated || accessState !== 'accessible') {
+      return;
+    }
+
     try {
-      await apiCall(`/content/${id}/view`, 'POST');
+      const result = await checkContentAccess(id);
+      if (!result.error && result.subscription) {
+        setSubscription(result.subscription);
+      }
     } catch (err) {
-      console.error('Failed to record view:', err.message);
+      console.error('Subscription check error:', err);
+      // Don't block on this
     }
   };
 
+  /**
+   * Record view for accessible content
+   */
+  const recordView = async () => {
+    // Only record if content is accessible
+    if (accessState !== 'accessible') {
+      return;
+    }
+
+    try {
+      await fetch(`${import.meta.env.VITE_API_URL}/content/${id}/view`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      });
+    } catch (err) {
+      console.error('View recording error:', err);
+      // Don't block on this
+    }
+  };
+
+  /**
+   * Load content on mount
+   */
   useEffect(() => {
-    if (!id) return;
+    if (!id) {
+      setAccessState('error');
+      setError('No content ID provided');
+      return;
+    }
+
     fetchContent();
   }, [id]);
 
+  /**
+   * Check subscription after content loads
+   */
   useEffect(() => {
-    if (!id || isLoading) return;
+    checkSubscription();
+  }, [accessState, isAuthenticated]);
 
-    const timer = setTimeout(() => {
-      recordView();
-    }, 100);
+  /**
+   * Record view after content loads
+   */
+  useEffect(() => {
+    recordView();
+  }, [accessState]);
 
-    return () => clearTimeout(timer);
-  }, [id, isLoading]);
+  // ===== RENDER BASED ON STATE MACHINE =====
 
-  const isCreator = content && user && content.creator_id === user.id;
-  const hasSubscription = false;
-
-  if (isLoading) {
+  // Loading state
+  if (accessState === null) {
     return (
       <div className="min-h-screen bg-gray-50">
-        <div className="max-w-3xl mx-auto px-4 py-12">
+        <div className="max-w-4xl mx-auto px-4 py-12">
           <LoadingSpinner message="Loading content..." />
         </div>
       </div>
     );
   }
 
-  if (error && !content) {
-    return (
-      <div className="min-h-screen bg-gray-50">
-        <div className="max-w-3xl mx-auto px-4 py-12">
-          <div className="bg-red-50 border border-red-200 rounded-lg p-8 text-center">
-            <h2 className="text-2xl font-bold text-red-800 mb-4">
-              {error}
-            </h2>
-            <button
-              onClick={() => navigate('/browse')}
-              className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition"
-            >
-              Back to Browse
-            </button>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  if (!content) {
-    return (
-      <div className="min-h-screen bg-gray-50">
-        <div className="max-w-3xl mx-auto px-4 py-12">
-          <p className="text-gray-600">No content</p>
-        </div>
-      </div>
-    );
-  }
-
-  return (
-    <div className="min-h-screen bg-gray-50">
-      <div className="max-w-3xl mx-auto px-4 py-12">
-        <button
-          onClick={() => navigate('/browse')}
-          className="text-blue-600 hover:text-blue-700 mb-6 flex items-center gap-2"
-        >
-          ← Back to Browse
-        </button>
-
-        <div className="bg-white rounded-lg shadow-md p-8 mb-8">
-          <h1 className="text-4xl font-bold text-gray-900 mb-4">
-            {content.title}
-          </h1>
-
-          <p className="text-lg text-gray-600 mb-6 leading-relaxed">
-            {content.description}
-          </p>
-
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-6 mb-8 py-6 border-y border-gray-200">
-            <div>
-              <p className="text-sm text-gray-500 mb-1">Creator</p>
-              <p className="font-semibold text-gray-900">
-                Creator #{content.creator_id}
-              </p>
-            </div>
-
-            <div>
-              <p className="text-sm text-gray-500 mb-1">Price</p>
-              <p className="font-semibold text-gray-900">
-                {content.is_free ? 'Free' : formatCurrency(content.price)}
-              </p>
-            </div>
-
-            <div>
-              <p className="text-sm text-gray-500 mb-1">Views</p>
-              <p className="font-semibold text-gray-900">
-                {formatNumber(content.views_count)}
-              </p>
-            </div>
-
-            <div>
-              <p className="text-sm text-gray-500 mb-1">Published</p>
-              <p className="font-semibold text-gray-900">
-                {formatDate(content.created_at)}
-              </p>
-            </div>
-          </div>
-        </div>
-
-        <SubscribeButton
-          contentId={content.id}
-          price={content.price}
-          isFree={content.is_free}
-          isCreator={isCreator}
-          hasSubscription={hasSubscription}
-          isDenied={accessDenied}
-          userError={error}
+  // Render by state
+  switch (accessState) {
+    case 'accessible':
+      return (
+        <AccessibleContentUI
+          content={content}
+          subscription={subscription}
+          user={user}
+          onBackClick={() => navigate('/browse')}
         />
-      </div>
-    </div>
-  );
+      );
+
+    case 'locked':
+      return (
+        <LockedPremiumContentUI
+          content={content}
+          error={error}
+          onBackClick={() => navigate('/browse')}
+        />
+      );
+
+    case 'requires_auth':
+      return <LoginPromptUI onBackClick={() => navigate('/browse')} />;
+
+    case 'not_found':
+      return <NotFoundPage onBackClick={() => navigate('/browse')} />;
+
+    case 'error':
+      return (
+        <ErrorPage
+          error={error}
+          onRetry={fetchContent}
+          onBackClick={() => navigate('/browse')}
+        />
+      );
+
+    default:
+      // Should never reach here
+      return (
+        <ErrorPage
+          error={`Unknown state: ${accessState}`}
+          onRetry={fetchContent}
+          onBackClick={() => navigate('/browse')}
+        />
+      );
+  }
 };

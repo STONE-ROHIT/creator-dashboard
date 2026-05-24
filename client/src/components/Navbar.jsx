@@ -2,9 +2,6 @@ import React from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 
-/**
- * Navbar Component
- */
 export const Navbar = () => {
   const { isAuthenticated, logout, user } = useAuth();
   const navigate = useNavigate();
@@ -29,6 +26,14 @@ export const Navbar = () => {
                 className="text-gray-700 hover:text-blue-600 transition font-medium"
               >
                 Browse
+              </Link>
+
+              {/* NEW: My Subscriptions Link */}
+              <Link
+                to="/subscriptions"
+                className="text-gray-700 hover:text-blue-600 transition font-medium"
+              >
+                My Subscriptions
               </Link>
 
               <span className="text-gray-700">

@@ -3,26 +3,20 @@ import Content from '../models/Content.js';
 
 /**
  * Subscribe user to content
- * 
- * Business rule checks (in order):
- * 1. Content must exist
- * 2. Content must be paid (is_free = false)
- * 3. User must not be creator
- * 4. Unique constraint: can't subscribe twice
+ * Creates pending subscription (awaiting payment)
  */
 export const subscribeToContent = async (req, res) => {
   try {
     const userId = req.user.id;
     const { contentId } = req.body;
 
-    // Validate input
     if (!contentId) {
       return res.status(400).json({
         error: 'contentId is required'
       });
     }
 
-    // 1. Verify content exists
+    // Verify content exists
     const content = await Content.findById(contentId);
     if (!content) {
       return res.status(404).json({
@@ -30,24 +24,21 @@ export const subscribeToContent = async (req, res) => {
       });
     }
 
-    // 2. Check if content is free
-    // Free content doesn't require subscription
+    // Check if free
     if (content.is_free) {
       return res.status(400).json({
         error: 'This content is free. No subscription needed.'
       });
     }
 
-    // 3. Check if user is creator
-    // Creator already has access, no subscription needed
+    // Check if creator
     if (content.creator_id === userId) {
       return res.status(400).json({
         error: 'You cannot subscribe to your own content'
       });
     }
 
-    // 4. Create subscription
-    // Unique constraint prevents duplicates
+    // Create subscription (status: 'pending')
     const subscription = await Subscription.create(userId, contentId);
 
     res.status(201).json({
@@ -56,7 +47,6 @@ export const subscribeToContent = async (req, res) => {
     });
 
   } catch (err) {
-    // Handle unique constraint violation
     if (err.message.includes('Already subscribed')) {
       return res.status(409).json({
         error: 'You are already subscribed to this content'
@@ -71,18 +61,29 @@ export const subscribeToContent = async (req, res) => {
 };
 
 /**
- * Get user's subscriptions
- * Only shows active subscriptions
+ * Get user's subscriptions (all status)
+ * Returns both active and pending
  */
 export const getUserSubscriptions = async (req, res) => {
   try {
     const userId = req.user.id;
 
-    const subscriptions = await Subscription.findByUserIdActive(userId);
+    // Get all subscriptions (active, pending, cancelled)
+    const subscriptions = await Subscription.findByUserIdAll(userId);
+
+    // Separate by status
+    const active = subscriptions.filter(s => s.status === 'active');
+    const pending = subscriptions.filter(s => s.status === 'pending');
+    const cancelled = subscriptions.filter(s => s.status === 'cancelled');
 
     res.json({
-      subscription_count: subscriptions.length,
-      subscriptions
+      subscriptions,
+      summary: {
+        total: subscriptions.length,
+        active: active.length,
+        pending: pending.length,
+        cancelled: cancelled.length
+      }
     });
 
   } catch (err) {
@@ -95,7 +96,6 @@ export const getUserSubscriptions = async (req, res) => {
 
 /**
  * Cancel subscription
- * User loses access to content
  */
 export const cancelSubscription = async (req, res) => {
   try {
@@ -108,7 +108,6 @@ export const cancelSubscription = async (req, res) => {
       });
     }
 
-    // Model verifies user owns subscription
     const subscription = await Subscription.cancel(subscriptionId, userId);
 
     res.json({
@@ -130,6 +129,80 @@ export const cancelSubscription = async (req, res) => {
     }
 
     console.error('cancelSubscription error:', err);
+    res.status(500).json({
+      error: 'Server error'
+    });
+  }
+};
+
+/**
+ * NEW: Activate subscription (for dev testing)
+ * 
+ * DEVELOPMENT ONLY
+ * Allows manually activating pending subscriptions without payment
+ * Used for testing before Razorpay integration
+ * 
+ * In production, only webhook activates subscriptions
+ */
+export const activateSubscriptionForTesting = async (req, res) => {
+  try {
+    // Security: Only in development
+    if (process.env.NODE_ENV !== 'development') {
+      return res.status(403).json({
+        error: 'This endpoint is only available in development'
+      });
+    }
+
+    const { subscriptionId } = req.params;
+    const userId = req.user.id;
+
+    if (!subscriptionId) {
+      return res.status(400).json({
+        error: 'subscriptionId is required'
+      });
+    }
+
+    // Verify subscription exists and belongs to user
+    const subscription = await Subscription.findById(subscriptionId);
+
+    if (!subscription) {
+      return res.status(404).json({
+        error: 'Subscription not found'
+      });
+    }
+
+    if (subscription.user_id !== userId) {
+      return res.status(403).json({
+        error: 'Unauthorized'
+      });
+    }
+
+    if (subscription.status !== 'pending') {
+      return res.status(400).json({
+        error: `Subscription is already ${subscription.status}`
+      });
+    }
+
+    // Get content to get price
+    const content = await Content.findById(subscription.content_id);
+    if (!content) {
+      return res.status(404).json({
+        error: 'Content not found'
+      });
+    }
+
+    // Activate subscription
+    const paidAmount = parseFloat(content.price);
+    const activated = await Subscription.activate(subscriptionId, paidAmount);
+
+    res.json({
+      message: 'Subscription activated (dev testing)',
+      subscription: activated,
+      warning: 'This was activated manually for testing. In production, only webhooks activate subscriptions.'
+    });
+
+  } catch (err) {
+    console.error('activateSubscriptionForTesting error:', err);
     res.status(500).json({
       error: 'Server error'
     });

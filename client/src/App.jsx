@@ -13,10 +13,9 @@ import { RegisterPage } from './pages/RegisterPage';
 import { DashboardPage } from './pages/DashboardPage';
 import { BrowseContentPage } from './pages/BrowseContentPage';
 import { ContentDetailPage } from './pages/ContentDetailPage';
+import { MySubscriptionsPage } from './pages/MySubscriptionsPage';
+import { CheckoutPage } from './pages/CheckoutPage';
 
-/**
- * AppRoutes
- */
 const AppRoutes = () => {
   const { isAuthenticated } = useAuth();
 
@@ -41,6 +40,17 @@ const AppRoutes = () => {
         <Route path="/browse" element={<BrowseContentPage />} />
         <Route path="/content/:id" element={<ContentDetailPage />} />
 
+        {/* NEW: Checkout page for subscription payment */}
+        <Route
+          path="/checkout/:subscriptionId"
+          element={<ProtectedRoute component={<CheckoutPage />} />}
+        />
+
+        <Route
+          path="/subscriptions"
+          element={<ProtectedRoute component={<MySubscriptionsPage />} />}
+        />
+
         <Route
           path="/dashboard"
           element={<ProtectedRoute component={<DashboardPage />} />}
@@ -63,9 +73,6 @@ const AppRoutes = () => {
   );
 };
 
-/**
- * App
- */
 export default function App() {
   return (
     <Router>
