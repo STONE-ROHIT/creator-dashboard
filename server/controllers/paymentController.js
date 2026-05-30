@@ -13,109 +13,98 @@ import {
 /**
  * POST /api/payments/create-order
  * 
- * Create Razorpay order for subscription
+ * Create Razorpay order for pending subscription
+ * 
+ * IMPORTANT: Subscription must already exist (created by POST /api/subscriptions)
+ * This endpoint uses the existing pending subscription to create a payment order
  * 
  * Flow:
- * 1. Validate content exists and is paid
- * 2. Check user is not creator
- * 3. Check no active subscription exists
- * 4. Create pending subscription
- * 5. Create Razorpay order
- * 6. Store payment_id in subscription
- * 7. Return order details to frontend
+ * 1. Validate subscriptionId exists and is pending
+ * 2. Verify subscription belongs to user
+ * 3. Get content price for verification
+ * 4. Create Razorpay order
+ * 5. Update subscription with payment_id
+ * 6. Return order details to frontend
  */
 export const createPaymentOrder = async (req, res) => {
   try {
     const userId = req.user.id;
-    const { contentId } = req.body;
+    const { subscriptionId } = req.body;
 
     // ===== VALIDATION =====
 
-    // Validate input exists
-    if (!contentId) {
+    if (!subscriptionId) {
       return res.status(400).json({
-        error: 'contentId is required',
+        error: 'subscriptionId is required',
       });
     }
 
-    // Validate contentId is number
-    if (typeof contentId !== 'number') {
+    if (typeof subscriptionId !== 'number') {
       return res.status(400).json({
-        error: 'contentId must be a number',
+        error: 'subscriptionId must be a number',
       });
     }
 
-    // ===== DATABASE QUERIES =====
+    // ===== FIND SUBSCRIPTION =====
 
-    // Query content from database
-    const content = await Content.findById(contentId);
+    const subscription = await Subscription.findById(subscriptionId);
+
+    if (!subscription) {
+      return res.status(404).json({
+        error: 'Subscription not found',
+      });
+    }
+
+    // Verify ownership
+    if (subscription.user_id !== userId) {
+      return res.status(403).json({
+        error: 'Unauthorized - subscription does not belong to you',
+      });
+    }
+
+    // Verify status is pending (not already active or cancelled)
+    if (subscription.status !== 'pending') {
+      return res.status(400).json({
+        error: `Subscription is ${subscription.status}. Only pending subscriptions can proceed to payment.`,
+      });
+    }
+
+    // ===== GET CONTENT DETAILS =====
+
+    const content = await Content.findById(subscription.content_id);
+
     if (!content) {
       return res.status(404).json({
         error: 'Content not found',
       });
     }
 
-    // Check if content is free
-    if (content.is_free) {
-      return res.status(400).json({
-        error: 'This content is free. No payment required.',
-      });
-    }
-
-    // Validate content price (convert string to number if needed)
+    // Validate price
     const contentPrice = parseFloat(content.price);
     if (!isValidPaymentAmount(contentPrice)) {
-    return res.status(400).json({
+      return res.status(400).json({
         error: 'Content has invalid price',
-    });
-    }
-
-    // Check user is not creator
-    if (content.creator_id === userId) {
-      return res.status(400).json({
-        error: 'You cannot subscribe to your own content',
-      });
-    }
-
-    // Check no active subscription exists
-    const existingSubscription = await Subscription.findActive(userId, contentId);
-    if (existingSubscription) {
-      return res.status(409).json({
-        error: 'You already have an active subscription to this content',
-      });
-    }
-
-    // ===== CREATE SUBSCRIPTION =====
-
-    let subscription;
-    try {
-      subscription = await Subscription.create(userId, contentId);
-    } catch (err) {
-      console.error('Subscription creation error:', err);
-      return res.status(400).json({
-        error: err.message || 'Failed to create subscription',
       });
     }
 
     // ===== CREATE RAZORPAY ORDER =====
 
     try {
-      // Convert rupees to paise for Razorpay
       const amountInPaise = rupeesToPaise(contentPrice);
 
-      // Create order
       const razorpayOrder = await razorpayInstance.orders.create({
-        amount: amountInPaise, // In paise
+        amount: amountInPaise,
         currency: 'INR',
         receipt: `sub_${subscription.id}`,
         notes: {
           subscriptionId: subscription.id,
-          contentId: contentId,
+          contentId: subscription.content_id,
           userId: userId,
         },
       });
 
-      // Store payment_id in subscription
+      // ===== STORE PAYMENT_ID =====
+
       await pool.query(
         'UPDATE subscriptions SET payment_id = $1 WHERE id = $2',
         [razorpayOrder.id, subscription.id]
@@ -127,22 +116,16 @@ export const createPaymentOrder = async (req, res) => {
         message: 'Payment order created successfully',
         order: {
           orderId: razorpayOrder.id,
-          amount: contentPrice, // In rupees (human-readable)
+          amount: contentPrice,
           amountDisplay: formatRupees(contentPrice),
           currency: 'INR',
           subscriptionId: subscription.id,
           contentTitle: content.title,
-          keyId: process.env.RAZORPAY_KEY_ID, // Public key for frontend
+          keyId: process.env.RAZORPAY_KEY_ID,
         },
       });
     } catch (razorpayErr) {
       console.error('Razorpay error:', razorpayErr);
-
-      // Cleanup: delete pending subscription
-      await pool.query(
-        'DELETE FROM subscriptions WHERE id = $1',
-        [subscription.id]
-      );
 
       return res.status(500).json({
         error: 'Failed to create payment order',
@@ -159,21 +142,22 @@ export const createPaymentOrder = async (req, res) => {
 /**
  * POST /api/payments/webhook
  * 
- * Razorpay webhook handler
+ * Razorpay webhook handler (called by Razorpay, not frontend)
  * 
- * Called by Razorpay when payment is authorized
- * 
- * Security checks:
+ * Process:
  * 1. Verify webhook signature (proves it's from Razorpay)
- * 2. Verify payment amount matches expected
- * 3. Verify subscription exists and is pending
+ * 2. Extract payment details
+ * 3. Find subscription by order ID
+ * 4. Verify amount matches
+ * 5. Activate subscription
  * 
  * Idempotency:
- * If called twice with same payment, second call succeeds silently
+ * If webhook called twice, second call succeeds silently
+ * (subscription already active, no re-activation)
  */
 export const handlePaymentWebhook = async (req, res) => {
   try {
-    // ===== GET WEBHOOK SECRET =====
+    // ===== VERIFY WEBHOOK SIGNATURE =====
 
     const webhookSecret = process.env.RAZORPAY_WEBHOOK_SECRET;
     if (!webhookSecret) {
@@ -183,8 +167,6 @@ export const handlePaymentWebhook = async (req, res) => {
       });
     }
 
-    // ===== EXTRACT SIGNATURE =====
-
     const signature = req.headers['x-razorpay-signature'];
     if (!signature) {
       console.error('Missing X-Razorpay-Signature header');
@@ -193,11 +175,11 @@ export const handlePaymentWebhook = async (req, res) => {
       });
     }
 
-    // ===== VERIFY SIGNATURE =====
-
     const rawBody = req.rawBody;
     if (!rawBody) {
-      console.error('No raw body available for signature verification');
+      console.error(
+        'No raw body available. Ensure server.js captures rawBody before JSON parsing.'
+      );
       return res.status(401).json({
         error: 'Cannot verify webhook',
       });
@@ -211,7 +193,7 @@ export const handlePaymentWebhook = async (req, res) => {
       });
     }
 
-    // ===== EXTRACT EVENT DETAILS =====
+    // ===== EXTRACT EVENT =====
 
     const { event, payload } = req.body;
 
@@ -256,7 +238,7 @@ export const handlePaymentWebhook = async (req, res) => {
     if (!amountMatches) {
       console.error(
         `Amount mismatch for subscription ${subscription.id}: ` +
-        `received ${paymentAmount}p, expected ${subscription.content_price_rupees * 100}p`
+          `received ${paymentAmount}p, expected ${subscription.content_price_rupees * 100}p`
       );
       return res.status(400).json({
         error: 'Payment amount mismatch',
@@ -266,12 +248,9 @@ export const handlePaymentWebhook = async (req, res) => {
     // ===== IDEMPOTENCY CHECK =====
 
     if (subscription.status === 'active') {
-      // Already processed this payment
       console.log(`Subscription ${subscription.id} already active (idempotent)`);
       return res.json({ status: 'ok' });
     }
-
-    // ===== VERIFY STATUS =====
 
     if (subscription.status !== 'pending') {
       console.error(
@@ -300,10 +279,8 @@ export const handlePaymentWebhook = async (req, res) => {
 
     console.log(
       `Subscription ${subscription.id} activated by payment ${paymentEntity.id} ` +
-      `(${formatRupees(paidAmount)})`
+        `(${formatRupees(paidAmount)})`
     );
-
-    // ===== RETURN SUCCESS =====
 
     return res.json({ status: 'ok' });
   } catch (err) {
@@ -317,10 +294,13 @@ export const handlePaymentWebhook = async (req, res) => {
 /**
  * POST /api/payments/verify
  * 
- * Verify payment status
+ * Called by frontend to check if payment was successful
  * 
- * Called by frontend after user returns from Razorpay checkout
- * Returns subscription status (pending/active)
+ * Returns:
+ * - 200: Payment confirmed, subscription is active
+ * - 202: Payment still processing, subscription still pending
+ * - 404: Subscription not found
+ * - 400: Subscription in invalid state
  */
 export const verifyPayment = async (req, res) => {
   try {
