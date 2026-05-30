@@ -1,16 +1,16 @@
 {
-  "name": "server",
+  "name": "creator-dashboard-server",
   "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "description": "Creator Dashboard API — Node.js + Express + PostgreSQL",
+  "main": "server.js",
   "type": "module",
   "scripts": {
     "start": "node server.js",
     "dev": "node --watch server.js"
   },
-  "keywords": [],
-  "author": "STONE",
-  "license": "ISC",
+  "engines": {
+    "node": ">=18.0.0"
+  },
   "dependencies": {
     "bcryptjs": "^3.0.3",
     "cors": "^2.8.6",
@@ -19,5 +19,8 @@
     "jsonwebtoken": "^9.0.3",
     "pg": "^8.20.0",
     "razorpay": "^2.9.2"
-  }
+  },
+  "devDependencies": {},
+  "author": "",
+  "license": "ISC"
 }
