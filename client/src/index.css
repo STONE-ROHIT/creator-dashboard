@@ -2,21 +2,74 @@
 @tailwind components;
 @tailwind utilities;
 
-* {
-  margin: 0;
-  padding: 0;
-  box-sizing: border-box;
+@layer base {
+  * { box-sizing: border-box; }
+
+  html, body {
+    background-color: #09090f;
+    color: #eae7f5;
+    font-family: 'DM Sans', ui-sans-serif, system-ui;
+    -webkit-font-smoothing: antialiased;
+    min-height: 100vh;
+  }
+
+  ::-webkit-scrollbar { width: 5px; }
+  ::-webkit-scrollbar-track { background: #11111a; }
+  ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 3px; }
+
+  ::selection { background: rgba(245,158,11,0.25); }
 }
 
-body {
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
-    'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
-    sans-serif;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-}
+@layer components {
+  /* Form inputs */
+  .input {
+    @apply w-full bg-white/[0.04] border border-white/10 rounded-lg text-ink-primary
+           placeholder:text-ink-dim font-sans text-sm px-3.5 py-2.5 outline-none
+           transition-colors focus:border-brand focus:bg-brand/[0.03];
+  }
 
-html, body, #root {
-  height: 100%;
-  width: 100%;
+  /* Buttons */
+  .btn-primary {
+    @apply inline-flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-medium
+           bg-brand text-[#0a0700] border border-brand cursor-pointer transition-all
+           hover:bg-brand-hover hover:border-brand-hover disabled:opacity-40 disabled:cursor-not-allowed;
+  }
+  .btn-outline {
+    @apply inline-flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-medium
+           bg-transparent text-ink-primary border border-white/10 cursor-pointer transition-all
+           hover:bg-white/[0.04] hover:border-white/20 disabled:opacity-40 disabled:cursor-not-allowed;
+  }
+  .btn-ghost {
+    @apply inline-flex items-center gap-2 px-3.5 py-2 rounded-lg text-sm font-medium
+           bg-transparent text-ink-muted border-transparent cursor-pointer transition-all
+           hover:bg-white/[0.04] hover:text-ink-primary disabled:opacity-40 disabled:cursor-not-allowed;
+  }
+  .btn-danger {
+    @apply inline-flex items-center gap-2 px-3.5 py-2 rounded-lg text-sm font-medium
+           bg-red-500/10 text-red-400 border border-red-500/20 cursor-pointer transition-all
+           hover:bg-red-500/15 disabled:opacity-40 disabled:cursor-not-allowed;
+  }
+  .btn-sm {
+    @apply px-3 py-1.5 text-xs rounded-md;
+  }
+  .btn-lg {
+    @apply px-6 py-3.5 text-base rounded-xl;
+  }
+
+  /* Card */
+  .card {
+    @apply bg-bg-card border border-white/[0.07] rounded-2xl;
+  }
+
+  /* Badge */
+  .badge-active   { @apply inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold tracking-wider uppercase bg-green-500/10 text-green-400; }
+  .badge-pending  { @apply inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold tracking-wider uppercase bg-amber-500/10 text-amber-400; }
+  .badge-cancelled{ @apply inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold tracking-wider uppercase bg-white/5 text-ink-dim; }
+  .badge-free     { @apply inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold tracking-wider uppercase bg-blue-500/10 text-blue-400; }
+  .badge-creator  { @apply inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold tracking-wider uppercase bg-brand/10 text-brand; }
+
+  /* Stat card */
+  .stat-card {
+    @apply bg-white/[0.03] border border-white/[0.07] rounded-xl p-4;
+  }
 }
