@@ -1,54 +1,55 @@
-import React from 'react';
-import { Link } from 'react-router-dom';
-import { formatCurrency, formatDate, formatNumber } from '../utils/api';
+import { useNavigate } from 'react-router-dom';
+import { formatCurrency, formatNumber } from '../utils/api.js';
 
-/**
- * ContentCard Component
- * Displays content preview in a card format
- */
-export const ContentCard = ({ content }) => {
-  const {
-    id,
-    title,
-    creator_name,
-    price,
-    is_free,
-    views_count,
-    created_at,
-  } = content;
+export default function ContentCard({ content }) {
+  const navigate = useNavigate();
+  const price = parseFloat(content.price);
 
   return (
-    <Link to={`/content/${id}`} className="block hover:shadow-lg transition">
-      <div className="bg-white rounded-lg shadow-md overflow-hidden hover:shadow-xl transition cursor-pointer">
-        <div className="w-full h-48 bg-gradient-to-br from-blue-400 to-blue-600 flex items-center justify-center">
-          <div className="text-white text-4xl">▶</div>
-        </div>
+    <div
+      onClick={() => navigate(`/content/${content.id}`)}
+      className="card overflow-hidden cursor-pointer transition-all duration-200 hover:border-white/[0.14] hover:-translate-y-0.5 hover:shadow-2xl hover:shadow-black/40 flex flex-col"
+    >
+      {/* Thumbnail */}
+      <div className="aspect-video bg-gradient-to-br from-[#1e1e30] to-[#2a2a42] flex items-center justify-center relative overflow-hidden">
+        <span className="text-4xl opacity-25 select-none">▶</span>
 
-        <div className="p-4">
-          <h3 className="font-bold text-lg text-gray-900 mb-2 line-clamp-2">
-            {title}
-          </h3>
-
-          <p className="text-sm text-gray-600 mb-3">By {creator_name}</p>
-
-          <div className="flex items-center gap-2 mb-3">
-            {is_free ? (
-              <span className="inline-block px-3 py-1 bg-green-100 text-green-800 text-sm font-semibold rounded-full">
-                Free
-              </span>
-            ) : (
-              <span className="inline-block px-3 py-1 bg-blue-100 text-blue-800 text-sm font-semibold rounded-full">
-                {formatCurrency(price)}
-              </span>
-            )}
-          </div>
-
-          <div className="flex justify-between text-xs text-gray-500">
-            <span>{formatNumber(views_count)} views</span>
-            <span>{formatDate(created_at)}</span>
-          </div>
+        {/* Price badge */}
+        <div className="absolute top-3 right-3">
+          {content.is_free ? (
+            <span className="badge-free">Free</span>
+          ) : (
+            <span className="px-2.5 py-1 rounded-full text-xs font-semibold bg-bg-primary/80 text-brand border border-brand/30 font-display">
+              {formatCurrency(price)}
+            </span>
+          )}
         </div>
       </div>
-    </Link>
+
+      {/* Body */}
+      <div className="p-4 flex flex-col flex-1">
+        <h3 className="font-display font-semibold text-ink-primary text-[15px] leading-snug mb-1.5 line-clamp-2">
+          {content.title}
+        </h3>
+
+        {content.description && (
+          <p className="text-xs text-ink-muted leading-relaxed mb-3 line-clamp-2 flex-1">
+            {content.description}
+          </p>
+        )}
+
+        <div className="flex items-center justify-between text-[11px] text-ink-dim pt-3 border-t border-white/[0.07] mt-auto">
+          <span className="flex items-center gap-1">
+            <span className="opacity-60">👁</span>
+            {formatNumber(content.views_count)} views
+          </span>
+          {content.creator_display_name && (
+            <span className="text-ink-muted truncate max-w-[120px]">
+              {content.creator_display_name}
+            </span>
+          )}
+        </div>
+      </div>
+    </div>
   );
-};
+}
