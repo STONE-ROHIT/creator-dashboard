@@ -1,153 +1,88 @@
-/**
- * API utility functions
- * 
- * Handles HTTP requests with JWT token
- * Includes error handling and response parsing
- */
+const BASE = '/api';
 
-const API_URL = import.meta.env.VITE_API_URL;
+async function request(method, path, body, token) {
+  const headers = { 'Content-Type': 'application/json' };
+  if (token) headers['Authorization'] = `Bearer ${token}`;
 
-/**
- * Get JWT token from localStorage
- */
-export const getToken = () => {
-  return localStorage.getItem('token');
-};
-
-/**
- * Make authenticated API request
- */
-export const apiCall = async (endpoint, method = 'GET', body = null) => {
-  const token = getToken();
-
-  if (!token && method !== 'GET') {
-    throw new Error('No token found. User must be authenticated.');
-  }
-
-  const headers = {
-    'Content-Type': 'application/json',
-  };
-
-  if (token) {
-    headers.Authorization = `Bearer ${token}`;
-  }
-
-  const options = {
+  const res = await fetch(`${BASE}${path}`, {
     method,
     headers,
-  };
+    body: body !== undefined ? JSON.stringify(body) : undefined,
+  });
 
-  if (body) {
-    options.body = JSON.stringify(body);
+  let data;
+  try {
+    data = await res.json();
+  } catch {
+    data = {};
   }
 
-  try {
-    const response = await fetch(`${API_URL}${endpoint}`, options);
-
-    if (response.status === 401) {
-      localStorage.removeItem('token');
-      throw new Error('Unauthorized. Please login again.');
-    }
-
-    if (!response.ok) {
-      const error = await response.json();
-      throw new Error(error.error || 'API request failed');
-    }
-
-    const data = await response.json();
-    return data;
-  } catch (err) {
-    console.error(`API Error [${method} ${endpoint}]:`, err.message);
+  if (!res.ok) {
+    const err = new Error(data.error || `Request failed (${res.status})`);
+    err.status = res.status;
+    err.data = data; // IMPORTANT: carry full response (403 includes locked content)
     throw err;
   }
-};
+  return data;
+}
 
-/**
- * Public API call (no authentication required)
- */
-export const publicApiCall = async (endpoint, method = 'GET', body = null) => {
-  const headers = {
-    'Content-Type': 'application/json',
-  };
+// ── Formatters ───────────────────────────────────────────
+export function formatCurrency(amount) {
+  return new Intl.NumberFormat('en-IN', {
+    style: 'currency', currency: 'INR', minimumFractionDigits: 0,
+  }).format(parseFloat(amount) || 0);
+}
 
-  const options = {
-    method,
-    headers,
-  };
+export function formatDate(dateStr) {
+  if (!dateStr) return '—';
+  return new Date(dateStr).toLocaleDateString('en-IN', {
+    day: 'numeric', month: 'short', year: 'numeric',
+  });
+}
 
-  if (body) {
-    options.body = JSON.stringify(body);
-  }
+export function formatNumber(n) {
+  const num = parseInt(n) || 0;
+  if (num >= 1000) return (num / 1000).toFixed(1) + 'k';
+  return String(num);
+}
 
-  try {
-    const response = await fetch(`${API_URL}${endpoint}`, options);
+// ── API calls ────────────────────────────────────────────
+export const api = {
+  // Auth
+  login:    (email, password) =>
+    request('POST', '/auth/login', { email, password }),
+  register: (email, username, password, passwordConfirm) =>
+    request('POST', '/auth/register', { email, username, password, passwordConfirm }),
 
-    if (!response.ok) {
-      const error = await response.json();
-      throw new Error(error.error || 'API request failed');
-    }
+  // Content (public)
+  browseContent: (page = 1) =>
+    request('GET', `/content/browse?page=${page}`),
+  getContent: (id, token) =>
+    request('GET', `/content/${id}`, undefined, token),
+  recordView: (id) =>
+    request('POST', `/content/${id}/view`),
 
-    const data = await response.json();
-    return data;
-  } catch (err) {
-    console.error(`API Error [${method} ${endpoint}]:`, err.message);
-    throw err;
-  }
-};
+  // Content (creator)
+  uploadContent:  (data, token)    => request('POST', '/content', data, token),
+  getMyContent:   (token)          => request('GET', '/content/my', undefined, token),
+  updateContent:  (id, data, token)=> request('PUT', `/content/${id}`, data, token),
+  deleteContent:  (id, token)      => request('DELETE', `/content/${id}`, undefined, token),
 
-/**
- * Format date for display
- */
-export const formatDate = (isoDate) => {
-  if (!isoDate) return '';
-  
-  try {
-    const date = new Date(isoDate);
-    return date.toLocaleDateString('en-US', {
-      year: 'numeric',
-      month: 'short',
-      day: 'numeric',
-    });
-  } catch (err) {
-    return '';
-  }
-};
+  // Creators
+  becomeCreator:  (displayName, token) =>
+    request('POST', '/creators/become-creator', { displayName }, token),
+  getMyCreator:   (token)            => request('GET', '/creators/me', undefined, token),
+  updateCreator:  (id, data, token)  => request('PUT', `/creators/${id}`, data, token),
 
-/**
- * UPDATED: Format currency for display
- * Handles both numbers and strings
- */
-export const formatCurrency = (amount) => {
-  // Handle null/undefined
-  if (amount === null || amount === undefined) {
-    return '₹0.00';
-  }
+  // Subscriptions
+  subscribe:           (contentId, token) =>
+    request('POST', '/subscriptions', { contentId }, token),
+  getSubscriptions:    (token) => request('GET', '/subscriptions', undefined, token),
+  cancelSubscription:  (id, token) => request('DELETE', `/subscriptions/${id}`, undefined, token),
 
-  // Convert string to number if needed
-  let num = amount;
-  if (typeof amount === 'string') {
-    num = parseFloat(amount);
-  }
-
-  // Validate number
-  if (isNaN(num)) {
-    return '₹0.00';
-  }
-
-  return `₹${num.toFixed(2)}`;
-};
-
-/**
- * Format large numbers for display
- */
-export const formatNumber = (num) => {
-  if (typeof num !== 'number') return '0';
-  
-  if (num >= 1000000) {
-    return (num / 1000000).toFixed(1) + 'M';
-  }
-  if (num >= 1000) {
-    return (num / 1000).toFixed(1) + 'K';
-  }
-  return num.toString();
+  // Payments
+  createOrder:   (subscriptionId, token) =>
+    request('POST', '/payments/create-order', { subscriptionId }, token),
+  verifyPayment: (subscriptionId, token) =>
+    request('POST', '/payments/verify', { subscriptionId }, token),
 };
