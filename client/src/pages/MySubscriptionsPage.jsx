@@ -1,196 +1,227 @@
-import React, { useState, useEffect } from 'react';
-import { Link } from 'react-router-dom';
-import { LoadingSpinner } from '../components/LoadingSpinner';
-import { ErrorMessage } from '../components/ErrorMessage';
-import { SubscriptionCard } from '../components/SubscriptionCard';
-import { getUserSubscriptions } from '../utils/subscriptionService';
+import { useState, useEffect } from 'react';
+import { useNavigate, Link } from 'react-router-dom';
+import { api, formatCurrency, formatDate } from '../utils/api.js';
+import { useAuth } from '../context/AuthContext.jsx';
+import { useToast } from '../context/ToastContext.jsx';
+import { PageLoader, EmptyState } from '../components/ui.jsx';
 
-/**
- * MySubscriptionsPage
- * 
- * Shows all subscriptions:
- * - Active (you have access)
- * - Pending (payment processing)
- * - Cancelled (previously cancelled)
- */
-export const MySubscriptionsPage = () => {
-  const [subscriptions, setSubscriptions] = useState([]);
-  const [activeCount, setActiveCount] = useState(0);
-  const [pendingCount, setPendingCount] = useState(0);
-  const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState(null);
+export default function MySubscriptionsPage() {
+  const { token } = useAuth();
+  const toast = useToast();
+  const navigate = useNavigate();
 
-  const fetchSubscriptions = async () => {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [cancelling, setCancelling] = useState(null);
+  const [activeTab, setActiveTab] = useState('active');
+
+  useEffect(() => { loadSubscriptions(); }, []);
+
+  async function loadSubscriptions() {
+    setLoading(true);
     try {
-      setIsLoading(true);
-      setError(null);
-
-      const result = await getUserSubscriptions();
-
-      if (result.error) {
-        setError(result.error);
-        setSubscriptions([]);
-      } else {
-        setSubscriptions(result.subscriptions || []);
-        
-        // Count by status
-        const active = result.subscriptions?.filter(s => s.status === 'active') || [];
-        const pending = result.subscriptions?.filter(s => s.status === 'pending') || [];
-        
-        setActiveCount(active.length);
-        setPendingCount(pending.length);
-      }
+      const res = await api.getSubscriptions(token);
+      setData(res);
     } catch (err) {
-      console.error('Failed to fetch subscriptions:', err);
-      setError(err.message || 'Failed to load subscriptions');
+      toast.error(err.message);
     } finally {
-      setIsLoading(false);
+      setLoading(false);
     }
-  };
+  }
 
-  useEffect(() => {
-    fetchSubscriptions();
-  }, []);
+  async function handleCancel(subId) {
+    if (!confirm('Cancel this subscription? You will lose access to the content.')) return;
+    setCancelling(subId);
+    try {
+      await api.cancelSubscription(subId, token);
+      toast.success('Subscription cancelled.');
+      await loadSubscriptions();
+    } catch (err) {
+      toast.error(err.message);
+    } finally {
+      setCancelling(null);
+    }
+  }
 
-  const handleSubscriptionCancelled = (subscriptionId) => {
-    setSubscriptions(
-      subscriptions.filter((sub) => sub.id !== subscriptionId)
-    );
-    setActiveCount(Math.max(0, activeCount - 1));
-  };
+  if (loading) return <PageLoader />;
 
-  // Separate subscriptions by status
-  const activeSubscriptions = subscriptions.filter(s => s.status === 'active');
-  const pendingSubscriptions = subscriptions.filter(s => s.status === 'pending');
-  const cancelledSubscriptions = subscriptions.filter(s => s.status === 'cancelled');
+  const subscriptions = data?.subscriptions || [];
+  const summary = data?.summary || {};
+
+  const tabs = [
+    { key: 'active',    label: 'Active',    count: summary.active    || 0 },
+    { key: 'pending',   label: 'Pending',   count: summary.pending   || 0 },
+    { key: 'cancelled', label: 'Cancelled', count: summary.cancelled || 0 },
+  ];
+
+  const filtered = subscriptions.filter(s => s.status === activeTab);
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      <div className="max-w-4xl mx-auto px-4 py-12">
-        {/* Header */}
-        <div className="mb-12">
-          <h1 className="text-4xl font-bold text-gray-900 mb-4">
-            My Subscriptions
-          </h1>
-          <p className="text-xl text-gray-600">
-            Manage your active and pending subscriptions
-          </p>
+    <div className="max-w-4xl mx-auto px-6 py-10">
+      {/* Header */}
+      <div className="mb-8">
+        <h1 className="font-display font-bold text-3xl tracking-tight mb-1">My Library</h1>
+        <p className="text-ink-muted text-sm">Your subscriptions and content access</p>
+      </div>
+
+      {/* Stats row */}
+      <div className="grid grid-cols-3 gap-4 mb-8">
+        {tabs.map(t => (
+          <div key={t.key} className="stat-card">
+            <p className="text-[11px] font-medium uppercase tracking-widest text-ink-dim mb-2">
+              {t.label}
+            </p>
+            <p className={`font-display font-bold text-2xl ${
+              t.key === 'active' ? 'text-green-400' :
+              t.key === 'pending' ? 'text-brand' : 'text-ink-dim'
+            }`}>
+              {t.count}
+            </p>
+          </div>
+        ))}
+      </div>
+
+      {/* Tabs */}
+      <div className="flex gap-1 border-b border-white/[0.07] mb-6">
+        {tabs.map(t => (
+          <button
+            key={t.key}
+            onClick={() => setActiveTab(t.key)}
+            className={`px-4 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors ${
+              activeTab === t.key
+                ? 'border-brand text-brand'
+                : 'border-transparent text-ink-muted hover:text-ink-primary'
+            }`}
+          >
+            {t.label}
+            {t.count > 0 && (
+              <span className={`ml-2 px-1.5 py-0.5 rounded text-[10px] ${
+                activeTab === t.key ? 'bg-brand/10 text-brand' : 'bg-white/5 text-ink-dim'
+              }`}>
+                {t.count}
+              </span>
+            )}
+          </button>
+        ))}
+      </div>
+
+      {/* Subscription list */}
+      {filtered.length === 0 ? (
+        <EmptyState
+          icon={activeTab === 'active' ? '📚' : activeTab === 'pending' ? '⏳' : '🗂️'}
+          title={
+            activeTab === 'active' ? 'No active subscriptions' :
+            activeTab === 'pending' ? 'No pending payments' :
+            'No cancelled subscriptions'
+          }
+          description={
+            activeTab === 'active' ? 'Subscribe to content to get lifetime access.' : undefined
+          }
+          action={
+            activeTab === 'active'
+              ? <Link to="/browse" className="btn-primary">Browse content</Link>
+              : undefined
+          }
+        />
+      ) : (
+        <div className="space-y-3">
+          {filtered.map(sub => (
+            <SubscriptionRow
+              key={sub.id}
+              sub={sub}
+              onCancel={handleCancel}
+              cancelling={cancelling === sub.id}
+              navigate={navigate}
+            />
+          ))}
         </div>
+      )}
+    </div>
+  );
+}
 
-        {/* Stats */}
-        <div className="grid grid-cols-2 md:grid-cols-3 gap-4 mb-12">
-          <div className="bg-white rounded-lg shadow-md p-6 text-center">
-            <p className="text-3xl font-bold text-green-600 mb-2">
-              {activeCount}
-            </p>
-            <p className="text-gray-600">Active</p>
-          </div>
+function SubscriptionRow({ sub, onCancel, cancelling, navigate }) {
+  const price = parseFloat(sub.paid_amount || sub.price || 0);
 
-          <div className="bg-white rounded-lg shadow-md p-6 text-center">
-            <p className="text-3xl font-bold text-yellow-600 mb-2">
-              {pendingCount}
-            </p>
-            <p className="text-gray-600">Pending</p>
-          </div>
+  return (
+    <div className="card p-5 flex items-center gap-4">
+      {/* Thumb placeholder */}
+      <div className="w-14 h-14 rounded-xl bg-gradient-to-br from-[#1e1e30] to-[#2a2a42] flex items-center justify-center text-xl shrink-0">
+        ▶
+      </div>
 
-          <div className="bg-white rounded-lg shadow-md p-6 text-center">
-            <p className="text-3xl font-bold text-gray-600 mb-2">
-              {cancelledSubscriptions.length}
-            </p>
-            <p className="text-gray-600">Cancelled</p>
-          </div>
+      {/* Info */}
+      <div className="flex-1 min-w-0">
+        <p className="font-medium text-ink-primary text-[15px] truncate mb-0.5">
+          {sub.content_title || `Content #${sub.content_id}`}
+        </p>
+        <div className="flex items-center gap-3 text-xs text-ink-muted">
+          <StatusBadge status={sub.status} />
+          <span>·</span>
+          <span>Subscribed {formatDate(sub.created_at)}</span>
+          {sub.paid_amount && (
+            <>
+              <span>·</span>
+              <span className="text-brand">{formatCurrency(price)}</span>
+            </>
+          )}
         </div>
+      </div>
 
-        {/* Loading */}
-        {isLoading ? (
-          <LoadingSpinner message="Loading subscriptions..." />
-        ) : error ? (
-          <ErrorMessage error={error} onRetry={fetchSubscriptions} />
-        ) : activeSubscriptions.length === 0 && pendingSubscriptions.length === 0 ? (
-          // No subscriptions
-          <div className="bg-white rounded-lg shadow-md p-12 text-center">
-            <p className="text-gray-600 text-lg mb-6">
-              You don't have any active subscriptions yet
-            </p>
-            <Link
-              to="/browse"
-              className="inline-block px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition"
+      {/* Actions */}
+      <div className="flex items-center gap-2 shrink-0">
+        {sub.status === 'active' && (
+          <>
+            <button
+              onClick={() => navigate(`/content/${sub.content_id}`)}
+              className="btn-outline btn-sm"
             >
-              Browse Content
-            </Link>
-          </div>
-        ) : (
-          <div>
-            {/* Active Subscriptions */}
-            {activeSubscriptions.length > 0 && (
-              <div className="mb-12">
-                <h2 className="text-2xl font-bold text-gray-900 mb-6 flex items-center gap-2">
-                  <span className="text-green-600">✓</span>
-                  Active Subscriptions
-                </h2>
+              View →
+            </button>
+            <button
+              onClick={() => onCancel(sub.id)}
+              disabled={cancelling}
+              className="btn-danger btn-sm"
+            >
+              Cancel
+            </button>
+          </>
+        )}
 
-                <div className="space-y-4">
-                  {activeSubscriptions.map((subscription) => (
-                    <SubscriptionCard
-                      key={subscription.id}
-                      subscription={subscription}
-                      onCancelled={handleSubscriptionCancelled}
-                      status="active"
-                    />
-                  ))}
-                </div>
-              </div>
-            )}
+        {sub.status === 'pending' && (
+          <>
+            <button
+              onClick={() => navigate(`/checkout/${sub.id}`)}
+              className="btn-primary btn-sm"
+            >
+              Complete payment
+            </button>
+            <button
+              onClick={() => onCancel(sub.id)}
+              disabled={cancelling}
+              className="btn-ghost btn-sm text-ink-dim"
+            >
+              Cancel
+            </button>
+          </>
+        )}
 
-            {/* Pending Subscriptions */}
-            {pendingSubscriptions.length > 0 && (
-              <div className="mb-12">
-                <h2 className="text-2xl font-bold text-gray-900 mb-6 flex items-center gap-2">
-                  <span className="text-yellow-600">⏳</span>
-                  Payment Processing
-                </h2>
-
-                <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-6 mb-6">
-                  <p className="text-yellow-800">
-                    Your subscription is awaiting payment confirmation. Complete payment in the checkout page to activate access.
-                  </p>
-                </div>
-
-                <div className="space-y-4">
-                  {pendingSubscriptions.map((subscription) => (
-                    <SubscriptionCard
-                      key={subscription.id}
-                      subscription={subscription}
-                      onCancelled={handleSubscriptionCancelled}
-                      status="pending"
-                    />
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* Cancelled Subscriptions */}
-            {cancelledSubscriptions.length > 0 && (
-              <div>
-                <h2 className="text-2xl font-bold text-gray-900 mb-6 flex items-center gap-2">
-                  <span className="text-gray-600">✗</span>
-                  Cancelled
-                </h2>
-
-                <div className="space-y-4">
-                  {cancelledSubscriptions.map((subscription) => (
-                    <SubscriptionCard
-                      key={subscription.id}
-                      subscription={subscription}
-                      status="cancelled"
-                    />
-                  ))}
-                </div>
-              </div>
-            )}
-          </div>
+        {sub.status === 'cancelled' && (
+          <button
+            onClick={() => navigate(`/content/${sub.content_id}`)}
+            className="btn-ghost btn-sm text-ink-dim"
+          >
+            Re-subscribe
+          </button>
         )}
       </div>
     </div>
   );
-};
+}
+
+function StatusBadge({ status }) {
+  if (status === 'active')    return <span className="badge-active">Active</span>;
+  if (status === 'pending')   return <span className="badge-pending">Pending payment</span>;
+  if (status === 'cancelled') return <span className="badge-cancelled">Cancelled</span>;
+  return null;
+}

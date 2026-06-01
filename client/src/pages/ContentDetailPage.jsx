@@ -1,265 +1,277 @@
-import React, { useState, useEffect } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
-import { useAuth } from '../context/AuthContext';
-import { LoadingSpinner } from '../components/LoadingSpinner';
-import { NotFoundPage } from '../components/NotFoundPage';
-import { LoginPromptUI } from '../components/LoginPromptUI';
-import { LockedPremiumContentUI } from '../components/LockedPremiumContentUI';
-import { AccessibleContentUI } from '../components/AccessibleContentUI';
-import { ErrorPage } from '../components/ErrorPage';
-import { checkContentAccess } from '../utils/subscriptionService';
+import { useState, useEffect } from 'react';
+import { useParams, useNavigate, Link } from 'react-router-dom';
+import { api, formatCurrency, formatDate, formatNumber } from '../utils/api.js';
+import { useAuth } from '../context/AuthContext.jsx';
+import { useToast } from '../context/ToastContext.jsx';
+import { PageLoader, LoadingSpinner } from '../components/ui.jsx';
 
-/**
- * ContentDetailPage
- * 
- * COMPLETE REWRITE with proper state machine
- * No more "stuck loading" state
- * 
- * State machine: null (loading) → one of:
- * - 'accessible' (user can view)
- * - 'locked' (needs subscription)
- * - 'requires_auth' (needs login)
- * - 'not_found' (404)
- * - 'error' (server error)
- */
-export const ContentDetailPage = () => {
+export default function ContentDetailPage() {
   const { id } = useParams();
   const navigate = useNavigate();
-  const { user, isAuthenticated } = useAuth();
+  const { token, isAuthenticated, isCreator, user } = useAuth();
+  const toast = useToast();
 
-  // ===== STATE =====
-  const [content, setContent] = useState(null);
-  const [accessState, setAccessState] = useState(null);  // null = loading
-  const [error, setError] = useState(null);
-  const [subscription, setSubscription] = useState(null);
+  // State machine
+  const [viewState, setViewState] = useState('loading');
+  const [content, setContent] = useState(null);       // Full content (accessible)
+  const [lockedData, setLockedData] = useState(null);  // Metadata on 403
+  const [subscribing, setSubscribing] = useState(false);
 
-  /**
-   * Fetch content and determine access
-   * 
-   * CRITICAL:
-   * - Always sets accessState to a final value (never leaves it null)
-   * - Handles all HTTP status codes
-   * - Extracts content from 403 response
-   * - Never has unhandled states
-   */
-  const fetchContent = async () => {
+  useEffect(() => {
+    loadContent();
+  }, [id, token]);
+
+  async function loadContent() {
+    setViewState('loading');
     try {
-      // Start loading
-      setAccessState(null);
-      setError(null);
-      setContent(null);
-
-      const token = localStorage.getItem('token');
-      const headers = {
-        'Content-Type': 'application/json',
-      };
-
-      if (token) {
-        headers.Authorization = `Bearer ${token}`;
-      }
-
-      const response = await fetch(
-        `${import.meta.env.VITE_API_URL}/content/${id}`,
-        { headers }
-      );
-
-      // Try to parse response
-      let data = null;
-      try {
-        data = await response.json();
-      } catch (e) {
-        // Response is not JSON
-        console.error('Non-JSON response:', e);
-        setError('Invalid server response');
-        setAccessState('error');
-        return;
-      }
-
-      // ===== HANDLE BY STATUS CODE =====
-
-      if (response.ok) {
-        // 200: Content accessible
-        console.log('[ContentDetailPage] 200 Accessible:', data);
-        setContent(data);
-        setAccessState('accessible');
-        return;
-      }
-
-      if (response.status === 403) {
-        // 403: Locked premium content
-        console.log('[ContentDetailPage] 403 Locked:', data);
-        
-        // Extract content from response
-        // Backend returns: { error, locked: true, content: {...} }
-        const contentData = data.content || data;
-        
-        if (!contentData || !contentData.id) {
-          // Malformed response
-          console.error('403 response missing content:', data);
-          setError('Unable to load content');
-          setAccessState('error');
-          return;
-        }
-
-        setContent(contentData);
-        setAccessState('locked');
-        return;
-      }
-
-      if (response.status === 401) {
-        // 401: Not authenticated
-        console.log('[ContentDetailPage] 401 Unauthorized');
-        setAccessState('requires_auth');
-        return;
-      }
-
-      if (response.status === 404) {
-        // 404: Not found
-        console.log('[ContentDetailPage] 404 Not Found');
-        setAccessState('not_found');
-        return;
-      }
-
-      // Other status codes
-      console.error('[ContentDetailPage] Unhandled status:', response.status, data);
-      setError(data.error || `Server error (${response.status})`);
-      setAccessState('error');
-
+      const data = await api.getContent(id, token);
+      setContent(data);
+      setViewState('accessible');
+      // Record view (fire-and-forget)
+      api.recordView(id).catch(() => {});
     } catch (err) {
-      // Network error, JSON parse error, etc.
-      console.error('[ContentDetailPage] Fetch error:', err);
-      setError(err.message || 'Network error');
-      setAccessState('error');
+      if (err.status === 401) {
+        setViewState('requires_auth');
+      } else if (err.status === 403) {
+        setViewState('locked');
+        setLockedData(err.data?.content || null);
+      } else if (err.status === 404) {
+        setViewState('not_found');
+      } else {
+        setViewState('error');
+      }
     }
-  };
+  }
 
-  /**
-   * Check subscription status for accessible content
-   */
-  const checkSubscription = async () => {
-    // Only check if:
-    // - User is authenticated
-    // - Content is accessible (not locked)
-    if (!isAuthenticated || accessState !== 'accessible') {
+  async function handleSubscribe() {
+    if (!isAuthenticated) {
+      navigate('/login', { state: { from: { pathname: `/content/${id}` } } });
       return;
     }
-
+    setSubscribing(true);
     try {
-      const result = await checkContentAccess(id);
-      if (!result.error && result.subscription) {
-        setSubscription(result.subscription);
-      }
+      const result = await api.subscribe(id, token);
+      toast.info('Subscription created — proceeding to checkout.');
+      navigate(`/checkout/${result.subscription.id}`);
     } catch (err) {
-      console.error('Subscription check error:', err);
-      // Don't block on this
+      toast.error(err.message);
+      setSubscribing(false);
     }
-  };
+  }
 
-  /**
-   * Record view for accessible content
-   */
-  const recordView = async () => {
-    // Only record if content is accessible
-    if (accessState !== 'accessible') {
-      return;
-    }
+  if (viewState === 'loading') return <PageLoader />;
 
-    try {
-      await fetch(`${import.meta.env.VITE_API_URL}/content/${id}/view`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({}),
-      });
-    } catch (err) {
-      console.error('View recording error:', err);
-      // Don't block on this
-    }
-  };
-
-  /**
-   * Load content on mount
-   */
-  useEffect(() => {
-    if (!id) {
-      setAccessState('error');
-      setError('No content ID provided');
-      return;
-    }
-
-    fetchContent();
-  }, [id]);
-
-  /**
-   * Check subscription after content loads
-   */
-  useEffect(() => {
-    checkSubscription();
-  }, [accessState, isAuthenticated]);
-
-  /**
-   * Record view after content loads
-   */
-  useEffect(() => {
-    recordView();
-  }, [accessState]);
-
-  // ===== RENDER BASED ON STATE MACHINE =====
-
-  // Loading state
-  if (accessState === null) {
+  if (viewState === 'not_found') {
     return (
-      <div className="min-h-screen bg-gray-50">
-        <div className="max-w-4xl mx-auto px-4 py-12">
-          <LoadingSpinner message="Loading content..." />
+      <div className="max-w-6xl mx-auto px-6 py-20 text-center">
+        <p className="text-5xl mb-4 opacity-20">🔍</p>
+        <h2 className="font-display font-bold text-xl mb-2">Content not found</h2>
+        <p className="text-sm text-ink-muted mb-6">This content may have been removed.</p>
+        <Link to="/browse" className="btn-outline">Back to browse</Link>
+      </div>
+    );
+  }
+
+  if (viewState === 'error') {
+    return (
+      <div className="max-w-6xl mx-auto px-6 py-20 text-center">
+        <p className="text-4xl mb-4 opacity-20">⚠️</p>
+        <h2 className="font-display font-bold text-xl mb-2">Something went wrong</h2>
+        <p className="text-sm text-ink-muted mb-6">Couldn't load this content.</p>
+        <button onClick={loadContent} className="btn-primary">Try again</button>
+      </div>
+    );
+  }
+
+  // ── Requires auth ──────────────────────────────────────────────────────────
+  if (viewState === 'requires_auth') {
+    return (
+      <div className="max-w-6xl mx-auto px-6 py-12">
+        <BackButton />
+        <div className="max-w-lg mx-auto text-center py-16">
+          <div className="w-14 h-14 rounded-2xl bg-brand/10 flex items-center justify-center text-2xl mx-auto mb-5">🔒</div>
+          <h2 className="font-display font-bold text-2xl tracking-tight mb-2">Sign in to view</h2>
+          <p className="text-ink-muted text-sm mb-7">
+            You need an account to access this content.
+          </p>
+          <div className="flex items-center justify-center gap-3">
+            <Link
+              to="/login"
+              state={{ from: { pathname: `/content/${id}` } }}
+              className="btn-primary"
+            >
+              Sign in
+            </Link>
+            <Link to="/register" className="btn-outline">Create account</Link>
+          </div>
         </div>
       </div>
     );
   }
 
-  // Render by state
-  switch (accessState) {
-    case 'accessible':
-      return (
-        <AccessibleContentUI
-          content={content}
-          subscription={subscription}
-          user={user}
-          onBackClick={() => navigate('/browse')}
-        />
-      );
+  // ── Locked (authenticated, no subscription) ────────────────────────────────
+  if (viewState === 'locked') {
+    const previewContent = lockedData;
+    const price = parseFloat(previewContent?.price || 0);
 
-    case 'locked':
-      return (
-        <LockedPremiumContentUI
-          content={content}
-          error={error}
-          onBackClick={() => navigate('/browse')}
-        />
-      );
+    return (
+      <div className="max-w-6xl mx-auto px-6 py-12">
+        <BackButton />
+        <div className="grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-10 items-start">
+          {/* Left */}
+          <div>
+            <h1 className="font-display font-bold text-3xl lg:text-4xl tracking-tight leading-tight mb-4">
+              {previewContent?.title || 'Premium Content'}
+            </h1>
+            <div className="flex items-center gap-3 text-sm text-ink-muted mb-6">
+              <span className="flex items-center gap-1.5">
+                <span className="w-1.5 h-1.5 rounded-full bg-brand" />
+                Locked
+              </span>
+              {previewContent?.views_count !== undefined && (
+                <span>{formatNumber(previewContent.views_count)} views</span>
+              )}
+            </div>
 
-    case 'requires_auth':
-      return <LoginPromptUI onBackClick={() => navigate('/browse')} />;
+            {previewContent?.description && (
+              <p className="text-ink-muted leading-relaxed mb-8 text-[15px]">
+                {previewContent.description}
+              </p>
+            )}
 
-    case 'not_found':
-      return <NotFoundPage onBackClick={() => navigate('/browse')} />;
+            {/* What you get */}
+            <div className="card p-5 space-y-3">
+              <p className="font-display font-semibold text-sm text-ink-muted uppercase tracking-wide mb-1">
+                What's included
+              </p>
+              {['Lifetime access', 'View on any device', 'Learn at your own pace', 'No subscription required'].map(item => (
+                <div key={item} className="flex items-center gap-2.5 text-sm">
+                  <span className="text-brand font-bold">✓</span>
+                  <span className="text-ink-muted">{item}</span>
+                </div>
+              ))}
+            </div>
+          </div>
 
-    case 'error':
-      return (
-        <ErrorPage
-          error={error}
-          onRetry={fetchContent}
-          onBackClick={() => navigate('/browse')}
-        />
-      );
+          {/* Right — Sticky purchase card */}
+          <div className="card p-6 lg:sticky lg:top-20">
+            <div className="text-3xl font-display font-bold text-brand tracking-tight mb-1">
+              {formatCurrency(price)}
+            </div>
+            <p className="text-xs text-ink-muted mb-5">One-time payment · Lifetime access</p>
 
-    default:
-      // Should never reach here
-      return (
-        <ErrorPage
-          error={`Unknown state: ${accessState}`}
-          onRetry={fetchContent}
-          onBackClick={() => navigate('/browse')}
-        />
-      );
+            <button
+              onClick={handleSubscribe}
+              disabled={subscribing}
+              className="btn-primary w-full justify-center btn-lg mb-3"
+            >
+              {subscribing ? <LoadingSpinner size="sm" /> : `Get access for ${formatCurrency(price)}`}
+            </button>
+
+            <p className="text-xs text-ink-dim text-center">
+              Secure payment via Razorpay
+            </p>
+
+            <hr className="border-white/[0.07] my-5" />
+            <p className="text-xs font-medium text-ink-dim uppercase tracking-wide mb-3">
+              About the creator
+            </p>
+            <p className="text-sm text-ink-muted">
+              {previewContent?.creator_display_name || 'Creator'}
+            </p>
+          </div>
+        </div>
+      </div>
+    );
   }
-};
+
+  // ── Accessible ─────────────────────────────────────────────────────────────
+  const isOwnContent = content.creator_id === user?.id;
+  const price = parseFloat(content.price);
+
+  return (
+    <div className="max-w-6xl mx-auto px-6 py-12">
+      <BackButton />
+
+      <div className="grid grid-cols-1 lg:grid-cols-[1fr_300px] gap-10 items-start">
+        {/* Main content */}
+        <div>
+          {/* Status badge */}
+          <div className="flex items-center gap-2 mb-4">
+            {content.is_free ? (
+              <span className="badge-free">Free</span>
+            ) : isOwnContent ? (
+              <span className="badge-creator">Your content</span>
+            ) : (
+              <span className="badge-active">Subscribed ✓</span>
+            )}
+          </div>
+
+          <h1 className="font-display font-bold text-3xl lg:text-4xl tracking-tight leading-tight mb-4">
+            {content.title}
+          </h1>
+
+          <div className="flex items-center gap-4 text-sm text-ink-muted mb-6">
+            <span>{formatNumber(content.views_count)} views</span>
+            <span>·</span>
+            <span>Added {formatDate(content.created_at)}</span>
+          </div>
+
+          {content.description && (
+            <p className="text-ink-muted leading-relaxed text-[15px] mb-8">
+              {content.description}
+            </p>
+          )}
+
+          {/* Content placeholder */}
+          <div className="card p-8 text-center">
+            <div className="w-16 h-16 rounded-2xl bg-brand/10 flex items-center justify-center text-3xl mx-auto mb-4">
+              ▶
+            </div>
+            <h3 className="font-display font-semibold text-ink-primary mb-2">Content viewer</h3>
+            <p className="text-sm text-ink-muted">
+              {content.file_url
+                ? <a href={content.file_url} target="_blank" rel="noopener noreferrer" className="text-brand hover:underline">Open content →</a>
+                : 'The creator has not yet uploaded the content file.'}
+            </p>
+          </div>
+        </div>
+
+        {/* Sidebar */}
+        <div className="card p-5 lg:sticky lg:top-20 space-y-4">
+          <div>
+            <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-dim mb-2">Price</p>
+            <p className="font-display font-bold text-xl text-ink-primary">
+              {content.is_free ? 'Free' : formatCurrency(price)}
+            </p>
+          </div>
+          <hr className="border-white/[0.07]" />
+          <div>
+            <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-dim mb-2">Creator</p>
+            <p className="text-sm font-medium text-ink-primary">{content.creator_display_name || 'Unknown creator'}</p>
+            {content.creator_bio && (
+              <p className="text-xs text-ink-muted mt-1 leading-relaxed">{content.creator_bio}</p>
+            )}
+          </div>
+          <hr className="border-white/[0.07]" />
+          <div>
+            <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-dim mb-2">Stats</p>
+            <p className="text-sm text-ink-muted">{formatNumber(content.views_count)} total views</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function BackButton() {
+  const navigate = useNavigate();
+  return (
+    <button
+      onClick={() => navigate(-1)}
+      className="flex items-center gap-1.5 text-ink-muted text-sm hover:text-ink-primary transition-colors mb-8"
+    >
+      ← Back
+    </button>
+  );
+}
